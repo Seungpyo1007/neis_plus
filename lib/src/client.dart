@@ -160,9 +160,15 @@ class NeisClient {
 
   /// Calls any NEIS service and returns its rows.
   ///
-  /// Entries of [params] with a `null` value are dropped. Pages are followed
-  /// until the reported total is reached or [maxPages] pages have been read.
-  /// Returns an empty list when the query matches nothing.
+  /// Entries of [params] with a `null` value are dropped. Pages are read until
+  /// the service runs out of rows or [maxPages] pages have been read, and an
+  /// empty list comes back when the query matches nothing.
+  ///
+  /// NEIS paging needs care: `list_total_count` can be larger than the number
+  /// of rows a service actually returns, and some services answer a page
+  /// beyond the last one by repeating the first page instead of an empty list.
+  /// Paging therefore stops on a short page or a repeated page, so rows are
+  /// never duplicated.
   Future<List<Map<String, Object?>>> rawRows(
     String service,
     Map<String, Object?> params, {
@@ -171,12 +177,32 @@ class NeisClient {
   }) async {
     final size = rows ?? pageSize;
     final collected = <Map<String, Object?>>[];
+    Map<String, Object?>? firstRowOfPreviousPage;
+
     for (var page = 1; page <= maxPages; page++) {
       final result = await _request(service, params, page: page, size: size);
+      if (result.rows.isEmpty) break;
+      if (_sameRow(firstRowOfPreviousPage, result.rows.first)) break;
+
       collected.addAll(result.rows);
-      if (result.rows.isEmpty || collected.length >= result.total) break;
+      firstRowOfPreviousPage = result.rows.first;
+
+      // A page shorter than requested is the last one, whatever the reported
+      // total says.
+      if (result.rows.length < size) break;
+      if (collected.length >= result.total) break;
     }
     return collected;
+  }
+
+  static bool _sameRow(Map<String, Object?>? a, Map<String, Object?> b) {
+    if (a == null || a.length != b.length) return false;
+    for (final entry in a.entries) {
+      if (!b.containsKey(entry.key) || b[entry.key] != entry.value) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<({int total, List<Map<String, Object?>> rows})> _request(

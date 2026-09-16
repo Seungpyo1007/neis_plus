@@ -280,6 +280,54 @@ void main() {
       expect(pages, ['1', '2']);
     });
 
+    test('stops on a short page even when the total is larger', () async {
+      // NEIS reports list_total_count 6 while returning 5 rows, and answers
+      // any further page with the same 5 rows.
+      var requests = 0;
+      final client = NeisClient(
+        pageSize: 100,
+        client: MockClient((request) async {
+          requests++;
+          return http.Response(
+            _page('hisTimetable', [
+              for (var period = 1; period <= 5; period++)
+                {'PERIO': '$period', 'ITRT_CNTNT': '과목$period'},
+            ], total: 6),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      );
+
+      final lessons = await client.timetable(_seoulHigh, grade: '1');
+
+      expect(lessons, hasLength(5));
+      expect(requests, 1);
+    });
+
+    test('stops when a page repeats the previous one', () async {
+      var requests = 0;
+      final client = NeisClient(
+        pageSize: 2,
+        client: MockClient((request) async {
+          requests++;
+          return http.Response(
+            _page('schoolInfo', [
+              {'SCHUL_NM': 'a'},
+              {'SCHUL_NM': 'b'},
+            ], total: 99),
+            200,
+            headers: {'content-type': 'application/json; charset=utf-8'},
+          );
+        }),
+      );
+
+      final schools = await client.schools(name: 'x');
+
+      expect(schools.map((s) => s.name).toList(), ['a', 'b']);
+      expect(requests, 2);
+    });
+
     test('reports no data as an empty list', () async {
       final client = NeisClient(
         client: _serves(_result('INFO-200', '해당하는 데이터가 없습니다.')),
