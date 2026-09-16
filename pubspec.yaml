@@ -1,0 +1,24 @@
+name: neis_plus
+description: >-
+  Unofficial NEIS open API client for Korean schools: search, meals with
+  allergens, timetables, calendars, and classes. Works without an API key.
+version: 0.0.1
+homepage: https://seungpyo.online
+repository: https://github.com/Seungpyo1007/neis_plus
+issue_tracker: https://github.com/Seungpyo1007/neis_plus/issues
+topics:
+  - korea
+  - school
+  - education
+  - open-api
+  - neis
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  http: ^1.6.0
+
+dev_dependencies:
+  lints: ^6.1.0
+  test: ^1.32.0
