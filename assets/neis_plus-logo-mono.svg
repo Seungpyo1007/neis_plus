@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">neis_plus monochrome logo</title>
+  <desc id="desc">A single-color graduation cap with a plus badge.</desc>
+
+  <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M168 214v74c0 31 39 52 88 52s88-21 88-52v-74" stroke-width="18"/>
+    <path d="M256 116 428 196 256 276 84 196Z" stroke-width="18"/>
+    <path d="M414 202v62" stroke-width="16"/>
+    <circle cx="414" cy="280" r="18" stroke-width="14"/>
+    <circle cx="378" cy="382" r="62" stroke-width="18"/>
+    <path d="M378 352v60" stroke-width="22"/>
+    <path d="M348 382h60" stroke-width="22"/>
+  </g>
+</svg>
