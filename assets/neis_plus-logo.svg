@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">neis_plus logo</title>
+  <desc id="desc">A navy rounded square containing a cream graduation cap and a plus badge.</desc>
+
+  <rect x="12" y="12" width="488" height="488" rx="126" fill="#2E4A7D"/>
+
+  <!-- Cap base -->
+  <path d="M168 214v74c0 31 39 52 88 52s88-21 88-52v-74"
+        fill="#FFF9F3" stroke="#101F38" stroke-width="14"
+        stroke-linejoin="round" stroke-linecap="round"/>
+
+  <!-- Mortarboard -->
+  <path d="M256 116 428 196 256 276 84 196Z"
+        fill="#FFF9F3" stroke="#101F38" stroke-width="14" stroke-linejoin="round"/>
+
+  <!-- Tassel -->
+  <path d="M414 202v62" fill="none" stroke="#101F38" stroke-width="14"
+        stroke-linecap="round"/>
+  <circle cx="414" cy="280" r="18" fill="#FFF9F3" stroke="#101F38" stroke-width="12"/>
+
+  <!-- Plus badge -->
+  <circle cx="378" cy="382" r="62" fill="#FFF9F3" stroke="#101F38" stroke-width="14"/>
+  <g stroke="#101F38" stroke-width="22" stroke-linecap="round">
+    <path d="M378 352v60"/>
+    <path d="M348 382h60"/>
+  </g>
+</svg>

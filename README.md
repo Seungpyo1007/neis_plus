@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Seungpyo1007/neis_plus/main/assets/neis_plus-logo.png" alt="NEIS+ logo: a graduation cap with a plus badge" width="128">
+</p>
+
 <h1 align="center">NEIS+</h1>
 
 <p align="center">
