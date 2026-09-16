@@ -1,28 +1,38 @@
+import 'services.dart';
+
 /// School level, from `SCHUL_KND_SC_NM`. It decides which timetable service a
 /// school uses.
 enum NeisSchoolKind {
   /// 초등학교.
-  elementary('초등학교', 'elsTimetable'),
+  elementary('초등학교', NeisService.elsTimetable, NeisService.elsTimetableArchive),
 
   /// 중학교.
-  middle('중학교', 'misTimetable'),
+  middle('중학교', NeisService.misTimetable, NeisService.misTimetableArchive),
 
   /// 고등학교.
-  high('고등학교', 'hisTimetable'),
+  high('고등학교', NeisService.hisTimetable, NeisService.hisTimetableArchive),
 
   /// 특수학교.
-  special('특수학교', 'spsTimetable'),
+  special('특수학교', NeisService.spsTimetable, NeisService.spsTimetableArchive),
 
   /// Anything else, such as 각종학교.
-  other('', 'hisTimetable');
+  other('', NeisService.hisTimetable, NeisService.hisTimetableArchive);
 
-  const NeisSchoolKind(this.label, this.timetableService);
+  const NeisSchoolKind(this.label, this.timetable, this.archiveTimetable);
 
   /// Korean label used by NEIS.
   final String label;
 
-  /// NEIS service that serves this level's timetable.
-  final String timetableService;
+  /// Service that serves this level's timetable for the current school years.
+  final NeisService timetable;
+
+  /// Service that serves this level's timetable for past school years.
+  ///
+  /// NEIS splits the two: a year is served by one or the other, never both.
+  final NeisService archiveTimetable;
+
+  /// Path of [timetable].
+  String get timetableService => timetable.path;
 
   /// Reads `SCHUL_KND_SC_NM`.
   static NeisSchoolKind fromLabel(String? label) {
@@ -355,6 +365,257 @@ class NeisClass {
 
   @override
   String toString() => 'NeisClass($year $grade-$name)';
+}
+
+/// A 학원 or 교습소, from `acaInsTiInfo`.
+class NeisAcademy {
+  /// Creates an academy.
+  const NeisAcademy({
+    required this.name,
+    required this.registrationNumber,
+    this.officeCode = '',
+    this.officeName = '',
+    this.kindName,
+    this.district,
+    this.realm,
+    this.level,
+    this.courseName,
+    this.courseList,
+    this.capacity,
+    this.tuition,
+    this.address,
+    this.phone,
+    this.status,
+    this.establishedOn,
+    this.raw = const <String, Object?>{},
+  });
+
+  /// Reads an `acaInsTiInfo` row.
+  factory NeisAcademy.fromRow(Map<String, Object?> row) => NeisAcademy(
+    name: '${row['ACA_NM'] ?? ''}',
+    registrationNumber: '${row['ACA_ASNUM'] ?? ''}',
+    officeCode: '${row['ATPT_OFCDC_SC_CODE'] ?? ''}',
+    officeName: '${row['ATPT_OFCDC_SC_NM'] ?? ''}',
+    kindName: _text(row['ACA_INSTI_SC_NM']),
+    district: _text(row['ADMST_ZONE_NM']),
+    realm: _text(row['REALM_SC_NM']),
+    level: _text(row['LE_ORD_NM']),
+    courseName: _text(row['LE_CRSE_NM']),
+    courseList: _text(row['LE_CRSE_LIST_NM']),
+    capacity: int.tryParse('${row['TOFOR_SMTOT'] ?? ''}'.trim()),
+    tuition: _text(row['PSNBY_THCC_CNTNT']),
+    address: _text(row['FA_RDNMA']),
+    phone: _text(row['FA_TELNO']),
+    status: _text(row['REG_STTUS_NM']),
+    establishedOn: parseNeisDate('${row['ESTBL_YMD'] ?? ''}'),
+    raw: row,
+  );
+
+  /// Name of the academy.
+  final String name;
+
+  /// Registration number, `ACA_ASNUM`.
+  final String registrationNumber;
+
+  /// Office of education code.
+  final String officeCode;
+
+  /// Office of education name.
+  final String officeName;
+
+  /// 학원 or 교습소.
+  final String? kindName;
+
+  /// 행정구역, such as 강남구.
+  final String? district;
+
+  /// Field of study, such as 입시·검정 및 보습.
+  final String? realm;
+
+  /// Level taught, such as 고등학생.
+  final String? level;
+
+  /// Course name.
+  final String? courseName;
+
+  /// Every course the academy registered.
+  final String? courseList;
+
+  /// Registered student capacity.
+  final int? capacity;
+
+  /// Tuition as published.
+  final String? tuition;
+
+  /// Road name address.
+  final String? address;
+
+  /// Phone number.
+  final String? phone;
+
+  /// Registration status, such as 정상.
+  final String? status;
+
+  /// Day the academy was established.
+  final DateTime? establishedOn;
+
+  /// The full row, for fields this class does not model.
+  final Map<String, Object?> raw;
+
+  @override
+  String toString() => 'NeisAcademy($name, $realm)';
+}
+
+/// A department of a school, from `schoolMajorinfo`.
+class NeisMajor {
+  /// Creates a department.
+  const NeisMajor({
+    required this.name,
+    this.officeCode = '',
+    this.schoolCode = '',
+    this.schoolName = '',
+    this.trackName,
+    this.dayNightName,
+    this.raw = const <String, Object?>{},
+  });
+
+  /// Reads a `schoolMajorinfo` row.
+  factory NeisMajor.fromRow(Map<String, Object?> row) => NeisMajor(
+    name: '${row['DDDEP_NM'] ?? ''}',
+    officeCode: '${row['ATPT_OFCDC_SC_CODE'] ?? ''}',
+    schoolCode: '${row['SD_SCHUL_CODE'] ?? ''}',
+    schoolName: '${row['SCHUL_NM'] ?? ''}',
+    trackName: _text(row['ORD_SC_NM']),
+    dayNightName: _text(row['DGHT_CRSE_SC_NM']),
+    raw: row,
+  );
+
+  /// Department name, such as 소프트웨어과.
+  final String name;
+
+  /// Office of education code.
+  final String officeCode;
+
+  /// School code.
+  final String schoolCode;
+
+  /// School name.
+  final String schoolName;
+
+  /// Track the department belongs to, such as 공업계.
+  final String? trackName;
+
+  /// 주간 or 야간.
+  final String? dayNightName;
+
+  /// The full row, for fields this class does not model.
+  final Map<String, Object?> raw;
+
+  @override
+  String toString() => 'NeisMajor($schoolName $name)';
+}
+
+/// A track of a school, from `schulAflcoinfo`.
+class NeisTrack {
+  /// Creates a track.
+  const NeisTrack({
+    required this.name,
+    this.officeCode = '',
+    this.schoolCode = '',
+    this.schoolName = '',
+    this.dayNightName,
+    this.raw = const <String, Object?>{},
+  });
+
+  /// Reads a `schulAflcoinfo` row.
+  factory NeisTrack.fromRow(Map<String, Object?> row) => NeisTrack(
+    name: '${row['ORD_SC_NM'] ?? ''}',
+    officeCode: '${row['ATPT_OFCDC_SC_CODE'] ?? ''}',
+    schoolCode: '${row['SD_SCHUL_CODE'] ?? ''}',
+    schoolName: '${row['SCHUL_NM'] ?? ''}',
+    dayNightName: _text(row['DGHT_CRSE_SC_NM']),
+    raw: row,
+  );
+
+  /// Track name, such as 일반계.
+  final String name;
+
+  /// Office of education code.
+  final String officeCode;
+
+  /// School code.
+  final String schoolCode;
+
+  /// School name.
+  final String schoolName;
+
+  /// 주간 or 야간.
+  final String? dayNightName;
+
+  /// The full row, for fields this class does not model.
+  final Map<String, Object?> raw;
+
+  @override
+  String toString() => 'NeisTrack($schoolName $name)';
+}
+
+/// A classroom a timetable can be taught in, from `tiClrminfo`.
+class NeisClassroom {
+  /// Creates a classroom.
+  const NeisClassroom({
+    required this.name,
+    this.year = '',
+    this.semester,
+    this.grade,
+    this.courseName,
+    this.trackName,
+    this.departmentName,
+    this.dayNightName,
+    this.raw = const <String, Object?>{},
+  });
+
+  /// Reads a `tiClrminfo` row.
+  factory NeisClassroom.fromRow(Map<String, Object?> row) => NeisClassroom(
+    name: '${row['CLRM_NM'] ?? ''}',
+    year: '${row['AY'] ?? ''}',
+    semester: _text(row['SEM']),
+    grade: _text(row['GRADE']),
+    courseName: _text(row['SCHUL_CRSE_SC_NM']),
+    trackName: _text(row['ORD_SC_NM']),
+    departmentName: _text(row['DDDEP_NM']),
+    dayNightName: _text(row['DGHT_CRSE_SC_NM']),
+    raw: row,
+  );
+
+  /// Classroom name.
+  final String name;
+
+  /// School year, such as `2026`.
+  final String year;
+
+  /// Semester, `1` or `2`.
+  final String? semester;
+
+  /// Grade using the classroom.
+  final String? grade;
+
+  /// Course name, such as 고등학교.
+  final String? courseName;
+
+  /// Track name, such as 일반계.
+  final String? trackName;
+
+  /// Department name for vocational schools.
+  final String? departmentName;
+
+  /// 주간 or 야간.
+  final String? dayNightName;
+
+  /// The full row, for fields this class does not model.
+  final Map<String, Object?> raw;
+
+  @override
+  String toString() => 'NeisClassroom($year $name)';
 }
 
 /// Parses a NEIS `yyyyMMdd` date, or returns `null`.

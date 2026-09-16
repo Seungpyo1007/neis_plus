@@ -412,6 +412,233 @@ void main() {
     });
   });
 
+  group('service catalogue', () {
+    test('covers every NEIS service exactly once', () {
+      expect(NeisService.all, hasLength(16));
+      expect(
+        NeisService.all.map((s) => s.path).toSet(),
+        hasLength(NeisService.all.length),
+      );
+      for (final service in NeisService.all) {
+        expect(service.koreanName, isNotEmpty);
+        expect(NeisService.byPath(service.path), same(service));
+      }
+    });
+
+    test('only schoolInfo answers without a parameter', () {
+      for (final service in NeisService.all) {
+        expect(
+          service.requiredParams.isEmpty,
+          service.path == 'schoolInfo',
+          reason: service.path,
+        );
+      }
+    });
+
+    test('past-year timetables answer under the current-year name', () {
+      expect(NeisService.hisTimetableArchive.path, 'hisTimetablebgs');
+      expect(NeisService.hisTimetableArchive.envelopeKey, 'hisTimetable');
+      expect(NeisService.hisTimetable.envelopeKey, 'hisTimetable');
+    });
+
+    test('office codes cover every office NEIS answers for', () {
+      expect(NeisOffice.all, hasLength(18));
+      expect(NeisOffice.byCode('B10'), same(NeisOffice.seoul));
+      expect(NeisOffice.byCode('Z99'), isNull);
+    });
+  });
+
+  group('call', () {
+    test('rejects a missing required parameter without asking NEIS', () async {
+      var requests = 0;
+      final client = NeisClient(
+        client: MockClient((request) async {
+          requests++;
+          return http.Response('{}', 200);
+        }),
+      );
+
+      await expectLater(
+        client.call(NeisService.mealServiceDietInfo, {
+          'ATPT_OFCDC_SC_CODE': 'B10',
+        }),
+        _throwsCode('missing_parameter'),
+      );
+      expect(requests, 0);
+    });
+
+    test('treats a blank required parameter as missing', () async {
+      final client = NeisClient(client: _serves('{}'));
+
+      await expectLater(
+        client.call(NeisService.acaInsTiInfo, {'ATPT_OFCDC_SC_CODE': '  '}),
+        _throwsCode('missing_parameter'),
+      );
+    });
+
+    test('reads rows of a service with no method of its own', () async {
+      final requests = <Uri>[];
+      final client = NeisClient(
+        client: _serves(
+          _page('acaInsTiInfo', [
+            {
+              'ACA_NM': '한빛수학학원',
+              'ACA_ASNUM': '1234',
+              'TOFOR_SMTOT': '60',
+              'ESTBL_YMD': '20150302',
+              'FA_TELNO': '',
+            },
+          ]),
+          requests: requests,
+        ),
+      );
+
+      final rows = await client.call(NeisService.acaInsTiInfo, {
+        'ATPT_OFCDC_SC_CODE': 'B10',
+        'ACA_NM': '수학',
+      });
+
+      expect(rows.single.text('ACA_NM'), '한빛수학학원');
+      expect(rows.single.integer('TOFOR_SMTOT'), 60);
+      expect(rows.single.date('ESTBL_YMD'), DateTime(2015, 3, 2));
+      expect(rows.single.text('FA_TELNO'), isNull);
+      expect(rows.single.text('NOT_SENT'), isNull);
+      expect(rows.single.has('FA_TELNO'), isTrue);
+      expect(requests.single.path, endsWith('/hub/acaInsTiInfo'));
+      expect(requests.single.queryParameters['ACA_NM'], '수학');
+    });
+  });
+
+  group('past-year timetable', () {
+    test('parses a response keyed by the current-year service', () async {
+      final requests = <Uri>[];
+      final client = NeisClient(
+        client: _serves(
+          // hisTimetablebgs answers under "hisTimetable".
+          _page('hisTimetable', [
+            {'ALL_TI_YMD': '20230502', 'PERIO': '3', 'ITRT_CNTNT': '물리학'},
+          ]),
+          requests: requests,
+        ),
+      );
+
+      final lessons = await client.timetable(
+        _seoulHigh,
+        year: '2023',
+        archived: true,
+      );
+
+      expect(lessons.single.subject, '물리학');
+      expect(requests.single.path, endsWith('/hub/hisTimetablebgs'));
+    });
+  });
+
+  group('academies, majors, tracks, and classrooms', () {
+    test('reads an academy row', () async {
+      final client = NeisClient(
+        client: _serves(
+          _page('acaInsTiInfo', [
+            {
+              'ATPT_OFCDC_SC_CODE': 'B10',
+              'ACA_NM': '한빛수학학원',
+              'ACA_ASNUM': '1234',
+              'ACA_INSTI_SC_NM': '학원',
+              'ADMST_ZONE_NM': '강남구',
+              'REALM_SC_NM': '입시.검정 및 보습',
+              'LE_ORD_NM': '고등학생',
+              'TOFOR_SMTOT': '60',
+              'FA_TELNO': '02-000-0000',
+              'REG_STTUS_NM': '정상',
+              'ESTBL_YMD': '20150302',
+            },
+          ]),
+        ),
+      );
+
+      final academy = (await client.academies(
+        officeCode: NeisOffice.seoul.code,
+        name: '수학',
+      )).single;
+
+      expect(academy.name, '한빛수학학원');
+      expect(academy.registrationNumber, '1234');
+      expect(academy.district, '강남구');
+      expect(academy.capacity, 60);
+      expect(academy.establishedOn, DateTime(2015, 3, 2));
+      expect(academy.status, '정상');
+    });
+
+    test('reads a department row', () async {
+      final client = NeisClient(
+        client: _serves(
+          _page('schoolMajorinfo', [
+            {
+              'SCHUL_NM': '서울고등학교',
+              'DDDEP_NM': '소프트웨어과',
+              'ORD_SC_NM': '공업계',
+              'DGHT_CRSE_SC_NM': '주간',
+            },
+          ]),
+        ),
+      );
+
+      final major = (await client.majors(school: _seoulHigh)).single;
+
+      expect(major.name, '소프트웨어과');
+      expect(major.trackName, '공업계');
+      expect(major.dayNightName, '주간');
+    });
+
+    test('reads a track row', () async {
+      final requests = <Uri>[];
+      final client = NeisClient(
+        client: _serves(
+          _page('schulAflcoinfo', [
+            {'SCHUL_NM': '서울고등학교', 'ORD_SC_NM': '일반계'},
+          ]),
+          requests: requests,
+        ),
+      );
+
+      final track = (await client.tracks(
+        officeCode: NeisOffice.seoul.code,
+      )).single;
+
+      expect(track.name, '일반계');
+      expect(requests.single.path, endsWith('/hub/schulAflcoinfo'));
+      expect(
+        requests.single.queryParameters.containsKey('SD_SCHUL_CODE'),
+        isFalse,
+      );
+    });
+
+    test('reads a classroom row', () async {
+      final client = NeisClient(
+        client: _serves(
+          _page('tiClrminfo', [
+            {
+              'AY': '2026',
+              'SEM': '1',
+              'GRADE': '1',
+              'CLRM_NM': '1-1',
+              'ORD_SC_NM': '일반계',
+            },
+          ]),
+        ),
+      );
+
+      final classroom = (await client.classrooms(
+        _seoulHigh,
+        year: '2026',
+      )).single;
+
+      expect(classroom.name, '1-1');
+      expect(classroom.year, '2026');
+      expect(classroom.semester, '1');
+      expect(classroom.trackName, '일반계');
+    });
+  });
+
   group('helpers', () {
     test('parses and formats NEIS dates', () {
       expect(parseNeisDate('20260612'), DateTime(2026, 6, 12));
