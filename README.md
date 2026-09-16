@@ -63,7 +63,7 @@ macOS, Linux, and the web.
 
 ```yaml
 dependencies:
-  neis_plus: ^0.0.1
+  neis_plus: ^0.0.2
 ```
 
 ## Usage

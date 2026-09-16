@@ -1,3 +1,7 @@
+## 0.0.2
+
+* Add the package logo and show it in the README. No code changes.
+
 ## 0.0.1
 
 * Initial release.
