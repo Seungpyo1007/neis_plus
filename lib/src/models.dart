@@ -1,3 +1,4 @@
+import 'meal_info.dart';
 import 'services.dart';
 import 'values.dart';
 
@@ -62,6 +63,14 @@ class NeisSchool {
     this.address,
     this.phone,
     this.website,
+    this.postalCode,
+    this.addressDetail,
+    this.fax,
+    this.coeducation,
+    this.highSchoolKind,
+    this.dayNight,
+    this.foundedOn,
+    this.supervisor,
     this.raw = const <String, Object?>{},
   });
 
@@ -82,6 +91,14 @@ class NeisSchool {
        address = null,
        phone = null,
        website = null,
+       postalCode = null,
+       addressDetail = null,
+       fax = null,
+       coeducation = null,
+       highSchoolKind = null,
+       dayNight = null,
+       foundedOn = null,
+       supervisor = null,
        raw = const <String, Object?>{};
 
   /// Reads a `schoolInfo` row.
@@ -97,6 +114,14 @@ class NeisSchool {
     address: _text(row['ORG_RDNMA']),
     phone: _text(row['ORG_TELNO']),
     website: _website(row['HMPG_ADRES']),
+    postalCode: _text(row['ORG_RDNZC']),
+    addressDetail: _text(row['ORG_RDNDA']),
+    fax: _text(row['ORG_FAXNO']),
+    coeducation: _text(row['COEDU_SC_NM']),
+    highSchoolKind: _text(row['HS_SC_NM']),
+    dayNight: _text(row['DGHT_SC_NM']),
+    foundedOn: parseNeisDate('${row['FOND_YMD'] ?? ''}'),
+    supervisor: _text(row['JU_ORG_NM']),
     raw: row,
   );
 
@@ -141,6 +166,30 @@ class NeisSchool {
   /// Website, when published.
   final String? website;
 
+  /// Postal code of [address].
+  final String? postalCode;
+
+  /// Rest of the address after [address], such as the building name.
+  final String? addressDetail;
+
+  /// Fax number.
+  final String? fax;
+
+  /// 남여공학, 남, or 여.
+  final String? coeducation;
+
+  /// High school type, such as 일반고 or 특목고. Empty for other levels.
+  final String? highSchoolKind;
+
+  /// 주간, 야간, or 주야.
+  final String? dayNight;
+
+  /// Day the school was founded.
+  final DateTime? foundedOn;
+
+  /// Body the school reports to, such as a district office of education.
+  final String? supervisor;
+
   /// The full row, for fields this class does not model.
   final Map<String, Object?> raw;
 
@@ -165,6 +214,22 @@ class NeisDish {
       if (number >= 1 && number <= neisAllergens.length)
         neisAllergens[number - 1],
   ];
+
+  /// [allergens] as [NeisAllergen] values. Numbers outside 1 to 19 are
+  /// left out.
+  List<NeisAllergen> get allergenKinds => [
+    for (final number in allergens) ?NeisAllergen.fromNumber(number),
+  ];
+
+  /// Whether the dish contains [allergen].
+  bool contains(NeisAllergen allergen) => allergens.contains(allergen.number);
+
+  /// [name] without the marks schools add, such as `*`, `(가)`, `(자율)`, or
+  /// a trailing `s`. See [splitNeisDishMarkers].
+  String get cleanName => splitNeisDishMarkers(name).name;
+
+  /// The marks [cleanName] removed, such as `*` or `(자율)`.
+  List<String> get markers => splitNeisDishMarkers(name).markers;
 
   @override
   String toString() => allergens.isEmpty ? name : '$name ($allergens)';
@@ -204,6 +269,8 @@ class NeisMeal {
     this.nutrients,
     this.servings,
     this.origin,
+    this.type,
+    this.schoolName,
     this.raw = const <String, Object?>{},
   });
 
@@ -216,6 +283,10 @@ class NeisMeal {
     nutrients: _lines(row['NTR_INFO']),
     servings: neisInt(row['MLSV_FGR']),
     origin: _lines(row['ORPLC_INFO']),
+    type:
+        NeisMealType.fromCode(row['MMEAL_SC_CODE']) ??
+        NeisMealType.fromLabel(_text(row['MMEAL_SC_NM'])),
+    schoolName: _text(row['SCHUL_NM']),
     raw: row,
   );
 
@@ -240,8 +311,46 @@ class NeisMeal {
   /// Origin of ingredients as published, one ingredient per line.
   final String? origin;
 
+  /// 조식, 중식, or 석식, or `null` for a type NEIS does not number.
+  final NeisMealType? type;
+
+  /// Name of the school serving the meal.
+  final String? schoolName;
+
   /// The full row, for fields this class does not model.
   final Map<String, Object?> raw;
+
+  /// [calories] as a number of kilocalories.
+  double? get kcal => parseNeisCalories(calories);
+
+  /// [nutrients] keyed by name, such as 탄수화물 or 비타민A.
+  Map<String, NeisNutrient> get nutrition => parseNeisNutrients(nutrients);
+
+  /// [origin] as one entry per ingredient.
+  List<NeisOrigin> get origins => parseNeisOrigins(origin);
+
+  /// Every allergen on the menu.
+  Set<NeisAllergen> get allergens => {
+    for (final dish in dishes) ...dish.allergenKinds,
+  };
+
+  /// Whether any dish contains [allergen].
+  bool containsAllergen(NeisAllergen allergen) =>
+      dishes.any((dish) => dish.contains(allergen));
+
+  /// Whether any dish contains one of [allergens].
+  bool containsAnyAllergen(Iterable<NeisAllergen> allergens) =>
+      allergens.any(containsAllergen);
+
+  /// The dishes that contain none of [allergens], for a menu filtered for
+  /// someone's allergies.
+  List<NeisDish> dishesWithout(Iterable<NeisAllergen> allergens) {
+    final avoid = allergens.toSet();
+    return [
+      for (final dish in dishes)
+        if (!avoid.any(dish.contains)) dish,
+    ];
+  }
 
   @override
   String toString() =>
@@ -257,6 +366,10 @@ class NeisScheduleEvent {
     required this.name,
     this.content,
     this.dayKind,
+    this.year,
+    this.courseName,
+    this.dayNightName,
+    this.grades = const <int>[],
     this.raw = const <String, Object?>{},
   });
 
@@ -267,8 +380,24 @@ class NeisScheduleEvent {
         name: '${row['EVENT_NM'] ?? ''}',
         content: _text(row['EVENT_CNTNT']),
         dayKind: _text(row['SBTR_DD_SC_NM']),
+        year: _text(row['AY']),
+        courseName: _text(row['SCHUL_CRSE_SC_NM']),
+        dayNightName: _text(row['DGHT_CRSE_SC_NM']),
+        grades: [
+          for (final (index, field) in _gradeFields.indexed)
+            if (_text(row[field]) == 'Y') index + 1,
+        ],
         raw: row,
       );
+
+  static const _gradeFields = [
+    'ONE_GRADE_EVENT_YN',
+    'TW_GRADE_EVENT_YN',
+    'THREE_GRADE_EVENT_YN',
+    'FR_GRADE_EVENT_YN',
+    'FIV_GRADE_EVENT_YN',
+    'SIX_GRADE_EVENT_YN',
+  ];
 
   /// Day of the event.
   final DateTime date;
@@ -285,6 +414,27 @@ class NeisScheduleEvent {
   /// Whether school is closed on this day: a 휴업일, such as a vacation day,
   /// or a 공휴일, a public holiday.
   bool get isSchoolClosed => dayKind == '휴업일' || dayKind == '공휴일';
+
+  /// School year, such as `2026`.
+  final String? year;
+
+  /// Course, such as 고등학교.
+  final String? courseName;
+
+  /// 주간 or 야간.
+  final String? dayNightName;
+
+  /// Grades the event applies to, from 1 to 6. NEIS marks grades a school
+  /// does not have with `*`, and those are left out.
+  final List<int> grades;
+
+  /// Whether the event applies to [grade]. An event NEIS sent without grade
+  /// marks applies to every grade.
+  bool appliesToGrade(int grade) => grades.isEmpty || grades.contains(grade);
+
+  /// Whether this is the weekly 토요휴업일 entry NEIS lists for every
+  /// Saturday.
+  bool get isSaturdayBreak => name.trim() == '토요휴업일';
 
   /// The full row, for fields this class does not model.
   final Map<String, Object?> raw;
@@ -303,6 +453,13 @@ class NeisLesson {
     required this.subject,
     this.grade,
     this.className,
+    this.year,
+    this.semester,
+    this.classroomName,
+    this.courseName,
+    this.dayNightName,
+    this.trackName,
+    this.departmentName,
     this.raw = const <String, Object?>{},
   });
 
@@ -313,6 +470,13 @@ class NeisLesson {
     subject: '${row['ITRT_CNTNT'] ?? ''}',
     grade: _text(row['GRADE']),
     className: _text(row['CLASS_NM']),
+    year: _text(row['AY']),
+    semester: _text(row['SEM']),
+    classroomName: _text(row['CLRM_NM']),
+    courseName: _text(row['SCHUL_CRSE_SC_NM']),
+    dayNightName: _text(row['DGHT_CRSE_SC_NM']),
+    trackName: _text(row['ORD_SC_NM']),
+    departmentName: _text(row['DDDEP_NM']),
     raw: row,
   );
 
@@ -331,6 +495,27 @@ class NeisLesson {
   /// Class name, when published.
   final String? className;
 
+  /// School year, such as `2026`.
+  final String? year;
+
+  /// Semester, `1` or `2`.
+  final String? semester;
+
+  /// Classroom, from `CLRM_NM`, for high schools and special schools.
+  final String? classroomName;
+
+  /// Course, such as 고등학교, for special schools.
+  final String? courseName;
+
+  /// 주간 or 야간.
+  final String? dayNightName;
+
+  /// Track, such as 일반계, for high schools.
+  final String? trackName;
+
+  /// Department, such as 일반학과, for high schools.
+  final String? departmentName;
+
   /// The full row, for fields this class does not model.
   final Map<String, Object?> raw;
 
@@ -347,6 +532,8 @@ class NeisClass {
     required this.name,
     this.courseName,
     this.departmentName,
+    this.dayNightName,
+    this.trackName,
     this.raw = const <String, Object?>{},
   });
 
@@ -357,6 +544,8 @@ class NeisClass {
     name: '${row['CLASS_NM'] ?? ''}',
     courseName: _text(row['SCHUL_CRSE_SC_NM']),
     departmentName: _text(row['DDDEP_NM']),
+    dayNightName: _text(row['DGHT_CRSE_SC_NM']),
+    trackName: _text(row['ORD_SC_NM']),
     raw: row,
   );
 
@@ -374,6 +563,12 @@ class NeisClass {
 
   /// Department name for vocational schools.
   final String? departmentName;
+
+  /// 주간 or 야간.
+  final String? dayNightName;
+
+  /// Track, such as 일반계.
+  final String? trackName;
 
   /// The full row, for fields this class does not model.
   final Map<String, Object?> raw;
@@ -402,6 +597,14 @@ class NeisAcademy {
     this.phone,
     this.status,
     this.establishedOn,
+    this.registeredOn,
+    this.suspendedFrom,
+    this.suspendedUntil,
+    this.simultaneousCapacity,
+    this.isBranch,
+    this.tuitionDisclosed,
+    this.addressDetail,
+    this.postalCode,
     this.raw = const <String, Object?>{},
   });
 
@@ -423,6 +626,20 @@ class NeisAcademy {
     phone: _text(row['FA_TELNO']),
     status: _text(row['REG_STTUS_NM']),
     establishedOn: parseNeisDate('${row['ESTBL_YMD'] ?? ''}'),
+    registeredOn: parseNeisDate('${row['REG_YMD'] ?? ''}'),
+    // NEIS leaves the start blank and the end at 99991231 for an academy
+    // that is not suspended.
+    suspendedFrom: parseNeisDate('${row['CAA_BEGIN_YMD'] ?? ''}'),
+    suspendedUntil: parseNeisDate('${row['CAA_BEGIN_YMD'] ?? ''}') == null
+        ? null
+        : parseNeisDate('${row['CAA_END_YMD'] ?? ''}'),
+    simultaneousCapacity: neisInt(row['DTM_RCPTN_ABLTY_NMPR_SMTOT']),
+    isBranch: _flag(row['BRHS_ACA_YN']),
+    tuitionDisclosed: _flag(row['THCC_OTHBC_YN']),
+    addressDetail: _text(
+      '${row['FA_RDNDA'] ?? ''}'.replaceFirst(RegExp(r'^\s*,\s*'), ''),
+    ),
+    postalCode: _text(row['FA_RDNZC']),
     raw: row,
   );
 
@@ -473,6 +690,31 @@ class NeisAcademy {
 
   /// Day the academy was established.
   final DateTime? establishedOn;
+
+  /// Day the academy was registered.
+  final DateTime? registeredOn;
+
+  /// First day of a suspension (휴원), or `null` when the academy is not
+  /// suspended.
+  final DateTime? suspendedFrom;
+
+  /// Last day of a suspension. Year 9999 when it has no planned end.
+  final DateTime? suspendedUntil;
+
+  /// Students the academy may teach at the same time.
+  final int? simultaneousCapacity;
+
+  /// Whether this is a branch (분원).
+  final bool? isBranch;
+
+  /// Whether the academy discloses its tuition.
+  final bool? tuitionDisclosed;
+
+  /// Rest of the address after [address], such as the floor and room.
+  final String? addressDetail;
+
+  /// Postal code of [address].
+  final String? postalCode;
 
   /// The full row, for fields this class does not model.
   final Map<String, Object?> raw;
@@ -691,6 +933,12 @@ List<NeisDish> parseNeisDishes(String menu) {
   }
   return dishes;
 }
+
+bool? _flag(Object? value) => switch (_text(value)) {
+  'Y' => true,
+  'N' => false,
+  _ => null,
+};
 
 String? _text(Object? value) {
   if (value == null) return null;

@@ -20,11 +20,11 @@ or any office of education.
 ```dart
 final neis = NeisClient();
 
-final school = (await neis.schools(name: '서울고등학교')).first;
-final meals = await neis.meals(school, date: neisToday());
+final school = await neis.findSchool('서울고'); // 서울고등학교
+final lunch = await neis.todayMeals(school!, type: NeisMealType.lunch);
 
-for (final dish in meals.first.dishes) {
-  print('${dish.name} ${dish.allergenNames}'); // 미역국 [난류, 대두, 밀]
+for (final dish in lunch.first.dishes) {
+  print('${dish.cleanName} ${dish.allergenNames}'); // 미역국 [대두, 밀]
 }
 
 neis.close();
@@ -65,19 +65,24 @@ method, and [`NeisService`](lib/src/services.dart) names them all for
 
 ## Features
 
-- **Schools**: search by name, region, or office of education, with the level
-  (초·중·고·특수) parsed.
-- **Meals**: dishes split out of the raw `<br/>` menu, with allergen numbers
-  turned into Korean names, plus calories, servings, and origin.
+- **Schools**: search by name, region, level, or office of education, and
+  `findSchool('서울고')` for names as people type them, best match first.
+- **Meals**: dishes split out of the raw `<br/>` menu, school marks such as
+  `*` or `(자율)` removed, allergens as a `NeisAllergen` enum with filters,
+  calories as a number, nutrients and origin parsed, breakfast, lunch, or
+  dinner only, and today's meals in Korean time.
 - **Timetables**: the right service is chosen for the school level, past
   school years included, and lessons come back sorted by date, grade, class,
   and period.
-- **Calendar**: events with `isSchoolClosed` for 휴업일 and 공휴일.
+- **Calendar**: events with `isSchoolClosed` for 휴업일 and 공휴일, the grades
+  each event is for, and export to an iCalendar (`.ics`) file.
 - **Classes, departments, tracks, classrooms**: the structure behind a
   timetable.
 - **Academies**: 학원 and 교습소 by region, field, and course.
 - **Any service by name**: `call(NeisService.…)` with required parameters
   checked before the request leaves.
+- **Large results**: `*Page` methods report the total and whether the
+  answer was cut off, and `stream` reads every page lazily.
 - **Office codes**: `NeisOffice` holds all 18 `ATPT_OFCDC_SC_CODE` values.
 - **No data is not an error**: `INFO-200` returns an empty list.
 
@@ -90,7 +95,7 @@ macOS, Linux, and the web.
 
 ```yaml
 dependencies:
-  neis_plus: ^0.0.4
+  neis_plus: ^0.1.0
 ```
 
 ## Usage
@@ -163,6 +168,80 @@ final tracks = await neis.tracks(school: school);
 final rooms = await neis.classrooms(school, year: '2026');
 ```
 
+### Meals in detail
+
+```dart
+final meal = (await neis.todayMeals(school, type: NeisMealType.lunch)).first;
+
+print(meal.kcal);                         // 664.5
+print(meal.nutrition['단백질']);          // 단백질 41.8g
+print(meal.origins.first);                // 쇠고기(종류): 국내산(한우)
+
+for (final dish in meal.dishes) {
+  // 배추김치(가)* → 배추김치, with the marks kept in dish.markers.
+  print('${dish.cleanName} ${dish.allergenKinds.map((a) => a.label)}');
+}
+
+// Dishes safe for someone allergic to milk and peanuts.
+final safe = meal.dishesWithout([NeisAllergen.milk, NeisAllergen.peanuts]);
+```
+
+`cleanName` removes the marks schools add for local ingredients, self-serve
+dishes, or a campus: a leading `*`, `@`, or `[기후동행식단]`, a trailing `*`,
+`s`, or digit, and tags such as `(가)`, `(자율)`, or `(점심)`. Parentheses that
+describe the dish, such as `(홍로)` or `(포도맛)`, stay. `name` is unchanged.
+
+### Finding a school
+
+```dart
+final schools = await neis.findSchools('경덕여고');
+// [경덕여자고등학교, …], the exact match first.
+```
+
+NEIS matches a school name anywhere in the name, so `schools(name: '서울고')`
+also returns 서울고덕초등학교. `findSchools` expands short names (`고`, `중`,
+`초`, `여고`, `외고`, …), searches both spellings, and ranks the results with
+`rankNeisSchools`.
+
+### Calendar to iCalendar
+
+```dart
+final events = await neis.schedule(
+  school,
+  from: DateTime(2026, 3, 1),
+  to: DateTime(2027, 2, 28),
+);
+File('calendar.ics').writeAsStringSync(
+  events.toIcs(name: school.name, grade: 2),
+);
+```
+
+Each event becomes an all-day event with a stable `UID`, so importing a newer
+export updates the calendar instead of duplicating it. The weekly 토요휴업일
+entries are left out unless `includeSaturdayBreaks: true`.
+
+### Large results
+
+The list methods stop after `maxPages` pages, 500 rows with the defaults. The
+`*Page` methods say when that happened:
+
+```dart
+final page = await neis.academiesPage(officeCode: NeisOffice.seoul.code);
+print('${page.items.length} of ${page.total}, truncated: ${page.truncated}');
+```
+
+`schoolsPage`, `academiesPage`, `rawPage`, and `callPage` return a
+`NeisPage`; `stream` reads every page of a service one request at a time and
+stops when the subscription is cancelled:
+
+```dart
+await for (final row in neis.stream(NeisService.acaInsTiInfo, {
+  'ATPT_OFCDC_SC_CODE': NeisOffice.seoul.code,
+})) {
+  print(NeisAcademy.fromRow(row.fields).name);
+}
+```
+
 ### Any service by name
 
 ```dart
@@ -187,9 +266,9 @@ try {
   await neis.meals(school, date: neisToday());
 } on NeisException catch (error) {
   switch (error.code) {
-    case 'invalid_key':
+    case NeisErrorCode.invalidKey:
       print('키가 잘못되었거나 아직 활성화되지 않았습니다');
-    case 'rate_limit':
+    case NeisErrorCode.rateLimit:
       print('요청 횟수를 초과했습니다');
     default:
       print('${error.code}: $error (${error.resultCode})');
@@ -209,6 +288,8 @@ try {
 | `server_error` | `ERROR-500`, `ERROR-600`, `ERROR-601` |
 | `http_error`, `timeout`, `invalid_response` | The request never produced usable JSON |
 
+`NeisErrorCode` holds every code as a constant.
+
 ## Limitations
 
 - Without an API key NEIS sends 5 rows and ignores the page number, so a
@@ -222,10 +303,11 @@ try {
 - Schools write class names as `1` or `01`, and NEIS only matches the one the
   school used. `timetable` tries the other spelling when the first matches
   nothing.
-- A call reads at most `maxPages` pages of `pageSize` rows, 500 rows with the
-  defaults, and stops there without saying so. A whole school year's
+- A list method reads at most `maxPages` pages of `pageSize` rows, 500 rows
+  with the defaults. Use a `*Page` method to see the total and whether the
+  answer was cut off, or `stream` to read everything. A whole school year's
   timetable is tens of thousands of rows: narrow it with `grade`, `className`,
-  and dates, or raise `maxPages`.
+  and dates.
 - NEIS dates are Korean dates. Use `neisToday()` rather than `DateTime.now()`
   on a server or a device outside Korea.
 - Rows keep NEIS field names in `raw`, and the typed classes cover the common
@@ -244,6 +326,9 @@ try {
 - Allergen numbers follow the 19 items NEIS lists; schools sometimes write
   menus that do not follow the format, and those dishes come back without
   allergens.
+- `cleanName` knows the marks seen across offices of education in 2026. A
+  school's own tag it does not know, such as a campus name in parentheses,
+  stays in the name.
 
 ## Related packages
 

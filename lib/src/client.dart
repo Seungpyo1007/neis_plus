@@ -4,8 +4,11 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'exception.dart';
+import 'meal_info.dart';
 import 'models.dart';
+import 'page.dart';
 import 'row.dart';
+import 'search.dart';
 import 'services.dart';
 import 'values.dart';
 
@@ -62,6 +65,9 @@ class NeisClient {
 
   /// Searches schools by name, region, or office of education.
   ///
+  /// NEIS matches [name] anywhere in the school name. [kind] keeps one school
+  /// level and [foundation] one of 국립, 공립, or 사립.
+  ///
   /// Planned schools that NEIS lists before they have a school code are left
   /// out: the other services cannot look them up, and asking with a blank
   /// code returns some other institution's data.
@@ -70,34 +76,120 @@ class NeisClient {
     String? officeCode,
     String? schoolCode,
     String? region,
+    NeisSchoolKind? kind,
+    String? foundation,
+    int maxPages = 5,
+  }) async => (await schoolsPage(
+    name: name,
+    officeCode: officeCode,
+    schoolCode: schoolCode,
+    region: region,
+    kind: kind,
+    foundation: foundation,
+    maxPages: maxPages,
+  )).items;
+
+  /// [schools] with the total NEIS reports and whether the list was cut off
+  /// at [maxPages].
+  Future<NeisPage<NeisSchool>> schoolsPage({
+    String? name,
+    String? officeCode,
+    String? schoolCode,
+    String? region,
+    NeisSchoolKind? kind,
+    String? foundation,
     int maxPages = 5,
   }) async {
-    final rows = await rawRows(NeisService.schoolInfo.path, {
+    final page = await rawPage(NeisService.schoolInfo.path, {
       'SCHUL_NM': name,
       'ATPT_OFCDC_SC_CODE': officeCode,
       'SD_SCHUL_CODE': schoolCode,
       'LCTN_SC_NM': region,
+      'SCHUL_KND_SC_NM': kind == null || kind == NeisSchoolKind.other
+          ? null
+          : kind.label,
+      'FOND_SC_NM': foundation,
     }, maxPages: maxPages);
-    return [
-      for (final row in rows)
-        if (NeisSchool.fromRow(row) case final school when school.hasCodes)
-          school,
-    ];
+    return NeisPage(
+      [
+        for (final row in page.items)
+          if (NeisSchool.fromRow(row) case final school when school.hasCodes)
+            school,
+      ],
+      total: page.total,
+      truncated: page.truncated,
+    );
+  }
+
+  /// Searches schools by a name as people write it and sorts the best match
+  /// first.
+  ///
+  /// Short names work: `서울고` finds 서울고등학교 and `경덕여고` finds
+  /// 경덕여자고등학교, which a plain [schools] search for the short name
+  /// misses. An exact name comes first, then names starting with the query,
+  /// then the rest. See [rankNeisSchools].
+  Future<List<NeisSchool>> findSchools(
+    String query, {
+    String? officeCode,
+    NeisSchoolKind? kind,
+    int maxPages = 5,
+  }) async {
+    final text = query.trim();
+    if (text.isEmpty) {
+      throw const NeisException(
+        'findSchools needs a school name.',
+        code: NeisErrorCode.missingParameter,
+      );
+    }
+    final names = {text, ?expandNeisSchoolName(text)};
+    final found = <String, NeisSchool>{};
+    for (final name in names) {
+      for (final school in await schools(
+        name: name,
+        officeCode: officeCode,
+        kind: kind,
+        maxPages: maxPages,
+      )) {
+        found.putIfAbsent(
+          '${school.officeCode}/${school.schoolCode}',
+          () => school,
+        );
+      }
+    }
+    return rankNeisSchools(text, found.values);
+  }
+
+  /// The best match for [query] from [findSchools], or `null` when nothing
+  /// matches.
+  Future<NeisSchool?> findSchool(
+    String query, {
+    String? officeCode,
+    NeisSchoolKind? kind,
+  }) async {
+    final schools = await findSchools(
+      query,
+      officeCode: officeCode,
+      kind: kind,
+      maxPages: 1,
+    );
+    return schools.isEmpty ? null : schools.first;
   }
 
   /// Reads school meals for one day, or for a range when [from] and [to] are
-  /// given.
+  /// given. [type] keeps only 조식, 중식, or 석식.
   Future<List<NeisMeal>> meals(
     NeisSchool school, {
     DateTime? date,
     DateTime? from,
     DateTime? to,
+    NeisMealType? type,
     int maxPages = 5,
   }) async {
     _checkCodes(school, 'meals');
     final rows = await rawRows(NeisService.mealServiceDietInfo.path, {
       'ATPT_OFCDC_SC_CODE': school.officeCode,
       'SD_SCHUL_CODE': school.schoolCode,
+      'MMEAL_SC_CODE': type?.code,
       'MLSV_YMD': date == null ? null : formatNeisDate(date),
       'MLSV_FROM_YMD': from == null ? null : formatNeisDate(from),
       'MLSV_TO_YMD': to == null ? null : formatNeisDate(to),
@@ -105,7 +197,25 @@ class NeisClient {
     return [for (final row in rows) NeisMeal.fromRow(row)];
   }
 
+  /// Reads today's meals in Korea, whatever the device's time zone.
+  ///
+  /// ```dart
+  /// final school = await neis.findSchool('서울고');
+  /// final lunch = await neis.todayMeals(school!, type: NeisMealType.lunch);
+  /// ```
+  ///
+  /// [now] stands in for the current time, for tests.
+  Future<List<NeisMeal>> todayMeals(
+    NeisSchool school, {
+    NeisMealType? type,
+    DateTime? now,
+  }) => meals(school, date: neisToday(now), type: type);
+
   /// Reads the school calendar for a day or a range.
+  ///
+  /// [courseName] (such as 고등학교) and [dayNightName] (주간 or 야간) narrow
+  /// the calendar of a combined school. Export the result with
+  /// [NeisScheduleIcs.toIcs].
   Future<List<NeisScheduleEvent>> schedule(
     NeisSchool school, {
     DateTime? date,
@@ -116,12 +226,16 @@ class NeisClient {
       'either way. Pass from and to instead. Will be removed in 0.2.0.',
     )
     String? year,
+    String? courseName,
+    String? dayNightName,
     int maxPages = 5,
   }) async {
     _checkCodes(school, 'schedule');
     final rows = await rawRows(NeisService.schoolSchedule.path, {
       'ATPT_OFCDC_SC_CODE': school.officeCode,
       'SD_SCHUL_CODE': school.schoolCode,
+      'SCHUL_CRSE_SC_NM': courseName,
+      'DGHT_CRSE_SC_NM': dayNightName,
       'AA_YMD': date == null ? null : formatNeisDate(date),
       'AA_FROM_YMD': from == null ? null : formatNeisDate(from),
       'AA_TO_YMD': to == null ? null : formatNeisDate(to),
@@ -147,6 +261,11 @@ class NeisClient {
   /// spelling the school used, so the other spelling is tried when the first
   /// matches nothing.
   ///
+  /// [period], [classroomName], [courseName], [dayNightName], [trackName],
+  /// and [departmentName] narrow the result further. NEIS accepts each only on
+  /// the school levels that publish it, for example classrooms on high and
+  /// special schools, and ignores it elsewhere.
+  ///
   /// Lessons are sorted by date, grade, class, and period.
   Future<List<NeisLesson>> timetable(
     NeisSchool school, {
@@ -159,6 +278,12 @@ class NeisClient {
     String? semester,
     NeisSchoolKind? kind,
     bool? archived,
+    int? period,
+    String? classroomName,
+    String? courseName,
+    String? dayNightName,
+    String? trackName,
+    String? departmentName,
     int maxPages = 5,
   }) async {
     _checkCodes(school, 'timetable');
@@ -194,6 +319,12 @@ class NeisClient {
           'CLASS_NM': name,
           'AY': year,
           'SEM': semester,
+          'PERIO': period,
+          'CLRM_NM': classroomName,
+          'SCHUL_CRSE_SC_NM': courseName,
+          'DGHT_CRSE_SC_NM': dayNightName,
+          'ORD_SC_NM': trackName,
+          'DDDEP_NM': departmentName,
         }, maxPages: maxPages);
         if (rows.isEmpty) continue;
         return [for (final row in rows) NeisLesson.fromRow(row)]
@@ -208,6 +339,10 @@ class NeisClient {
     NeisSchool school, {
     String? year,
     String? grade,
+    String? courseName,
+    String? dayNightName,
+    String? trackName,
+    String? departmentName,
     int maxPages = 5,
   }) async {
     _checkCodes(school, 'classes');
@@ -216,6 +351,10 @@ class NeisClient {
       'SD_SCHUL_CODE': school.schoolCode,
       'AY': year,
       'GRADE': grade,
+      'SCHUL_CRSE_SC_NM': courseName,
+      'DGHT_CRSE_SC_NM': dayNightName,
+      'ORD_SC_NM': trackName,
+      'DDDEP_NM': departmentName,
     }, maxPages: maxPages);
     return [for (final row in rows) NeisClass.fromRow(row)];
   }
@@ -240,8 +379,31 @@ class NeisClient {
     String? courseName,
     String? registrationNumber,
     int maxPages = 5,
+  }) async => (await academiesPage(
+    officeCode: officeCode,
+    name: name,
+    district: district,
+    realm: realm,
+    level: level,
+    courseName: courseName,
+    registrationNumber: registrationNumber,
+    maxPages: maxPages,
+  )).items;
+
+  /// [academies] with the total NEIS reports and whether the list was cut off
+  /// at [maxPages]. An office of education can have tens of thousands of
+  /// academies, far more than the default 500 rows.
+  Future<NeisPage<NeisAcademy>> academiesPage({
+    required String officeCode,
+    String? name,
+    String? district,
+    String? realm,
+    String? level,
+    String? courseName,
+    String? registrationNumber,
+    int maxPages = 5,
   }) async {
-    final rows = await rawRows(NeisService.acaInsTiInfo.path, {
+    final page = await rawPage(NeisService.acaInsTiInfo.path, {
       'ATPT_OFCDC_SC_CODE': officeCode,
       'ACA_NM': name,
       'ADMST_ZONE_NM': district,
@@ -250,7 +412,7 @@ class NeisClient {
       'LE_CRSE_NM': courseName,
       'ACA_ASNUM': registrationNumber,
     }, maxPages: maxPages);
-    return [for (final row in rows) NeisAcademy.fromRow(row)];
+    return page.map(NeisAcademy.fromRow);
   }
 
   /// Reads the departments (학과) of a school, or of a whole office of
@@ -296,6 +458,9 @@ class NeisClient {
     String? semester,
     String? grade,
     String? departmentName,
+    String? courseName,
+    String? dayNightName,
+    String? trackName,
     int maxPages = 5,
   }) async {
     _checkCodes(school, 'classrooms');
@@ -306,6 +471,9 @@ class NeisClient {
       'SEM': semester,
       'GRADE': grade,
       'DDDEP_NM': departmentName,
+      'SCHUL_CRSE_SC_NM': courseName,
+      'DGHT_CRSE_SC_NM': dayNightName,
+      'ORD_SC_NM': trackName,
     }, maxPages: maxPages);
     return [for (final row in rows) NeisClassroom.fromRow(row)];
   }
@@ -334,26 +502,95 @@ class NeisClient {
     Map<String, Object?> params, {
     int? rows,
     int maxPages = 5,
+  }) async =>
+      (await rawPage(service, params, rows: rows, maxPages: maxPages)).items;
+
+  /// [rawRows] with the total NEIS reports and whether reading stopped at
+  /// [maxPages] while the service had more.
+  Future<NeisPage<Map<String, Object?>>> rawPage(
+    String service,
+    Map<String, Object?> params, {
+    int? rows,
+    int maxPages = 5,
   }) async {
+    final collected = <Map<String, Object?>>[];
+    var total = 0;
+    var complete = false;
+    await for (final page in _pages(service, params, rows: rows)) {
+      total = page.total;
+      collected.addAll(page.rows);
+      if (page.last) {
+        complete = true;
+        break;
+      }
+      if (page.index >= maxPages) break;
+    }
+    // Without a key NEIS sends 5 rows whatever the page size, which looks
+    // like a short last page; the reported total tells the truth.
+    final keyless = apiKey == null || apiKey!.isEmpty;
+    return NeisPage(
+      collected,
+      total: total,
+      truncated: (!complete || keyless) && collected.length < total,
+    );
+  }
+
+  /// Streams every row of [service], requesting one page at a time as the
+  /// stream is listened to, with no page limit unless [maxPages] is given.
+  ///
+  /// Cancelling the subscription stops further requests.
+  ///
+  /// ```dart
+  /// await for (final row in neis.stream(NeisService.acaInsTiInfo, {
+  ///   'ATPT_OFCDC_SC_CODE': 'B10',
+  /// })) {
+  ///   print(NeisAcademy.fromRow(row.fields).name);
+  /// }
+  /// ```
+  Stream<NeisRow> stream(
+    NeisService service,
+    Map<String, Object?> params, {
+    int? rows,
+    int? maxPages,
+  }) async* {
+    _checkRequired(service, params);
+    await for (final page in _pages(service.path, params, rows: rows)) {
+      for (final row in page.rows) {
+        yield NeisRow(row);
+      }
+      if (page.last || (maxPages != null && page.index >= maxPages)) break;
+    }
+  }
+
+  /// Reads pages of [service] until one is empty, repeats the previous one,
+  /// is short, or reaches the reported total. The page that ends the read has
+  /// `last` set; an empty or repeated page is not emitted.
+  Stream<({int index, int total, List<Map<String, Object?>> rows, bool last})>
+  _pages(String service, Map<String, Object?> params, {int? rows}) async* {
     if (rows != null) _checkPageSize(rows, 'rows');
     final size = rows ?? pageSize;
-    final collected = <Map<String, Object?>>[];
+    var read = 0;
     Map<String, Object?>? firstRowOfPreviousPage;
 
-    for (var page = 1; page <= maxPages; page++) {
+    for (var page = 1; ; page++) {
       final result = await _request(service, params, page: page, size: size);
-      if (result.rows.isEmpty) break;
-      if (_sameRow(firstRowOfPreviousPage, result.rows.first)) break;
-
-      collected.addAll(result.rows);
+      if (result.rows.isEmpty ||
+          _sameRow(firstRowOfPreviousPage, result.rows.first)) {
+        // Nothing new: the previous page was the last one. Without an API key
+        // NEIS repeats its 5 rows on every page and lands here on page 2.
+        if (page > 1) {
+          yield (index: page, total: result.total, rows: const [], last: true);
+        }
+        return;
+      }
       firstRowOfPreviousPage = result.rows.first;
-
+      read += result.rows.length;
       // A page shorter than requested is the last one, whatever the reported
       // total says.
-      if (result.rows.length < size) break;
-      if (collected.length >= result.total) break;
+      final last = result.rows.length < size || read >= result.total;
+      yield (index: page, total: result.total, rows: result.rows, last: last);
+      if (last) return;
     }
-    return collected;
   }
 
   /// Calls any NEIS service by name and returns its rows.
@@ -376,7 +613,28 @@ class NeisClient {
     Map<String, Object?> params, {
     int? rows,
     int maxPages = 5,
+  }) async =>
+      (await callPage(service, params, rows: rows, maxPages: maxPages)).items;
+
+  /// [call] with the total NEIS reports and whether reading stopped at
+  /// [maxPages] while the service had more.
+  Future<NeisPage<NeisRow>> callPage(
+    NeisService service,
+    Map<String, Object?> params, {
+    int? rows,
+    int maxPages = 5,
   }) async {
+    _checkRequired(service, params);
+    final page = await rawPage(
+      service.path,
+      params,
+      rows: rows,
+      maxPages: maxPages,
+    );
+    return page.map(NeisRow.new);
+  }
+
+  static void _checkRequired(NeisService service, Map<String, Object?> params) {
     final missing = [
       for (final name in service.requiredParams)
         if ('${params[name] ?? ''}'.trim().isEmpty) name,
@@ -384,16 +642,9 @@ class NeisClient {
     if (missing.isNotEmpty) {
       throw NeisException(
         '${service.path} needs ${missing.join(', ')}.',
-        code: 'missing_parameter',
+        code: NeisErrorCode.missingParameter,
       );
     }
-    final result = await rawRows(
-      service.path,
-      params,
-      rows: rows,
-      maxPages: maxPages,
-    );
-    return [for (final row in result) NeisRow(row)];
   }
 
   static void _checkPageSize(int size, String name) {

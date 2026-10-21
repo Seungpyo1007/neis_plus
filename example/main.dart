@@ -4,36 +4,38 @@ import 'package:neis_plus/neis_plus.dart';
 
 /// Prints today's meal and timetable for a school:
 ///
-///     dart run example/main.dart 서울고등학교
+///     dart run example/main.dart 서울고
 ///
 /// Set NEIS_KEY to use your own API key; without one NEIS still answers a
 /// limited number of requests.
 Future<void> main(List<String> args) async {
-  final name = args.isEmpty ? '서울고등학교' : args.first;
+  final name = args.isEmpty ? '서울고' : args.first;
   final client = NeisClient(apiKey: Platform.environment['NEIS_KEY']);
 
   try {
-    final schools = await client.schools(name: name);
-    if (schools.isEmpty) {
+    final school = await client.findSchool(name);
+    if (school == null) {
       print('"$name" 학교를 찾지 못했습니다.');
       return;
     }
-    final school = schools.first;
     print('${school.name} (${school.region}, ${school.kind.label})');
 
     final today = neisToday();
-    final meals = await client.meals(school, date: today);
+    final meals = await client.todayMeals(school);
     if (meals.isEmpty) {
       print('  오늘 급식 정보가 없습니다.');
     }
     for (final meal in meals) {
-      print('  ${meal.typeName} (${meal.calories ?? '-'})');
+      print('  ${meal.typeName} (${meal.kcal ?? '-'} kcal)');
       for (final dish in meal.dishes) {
         final allergens = dish.allergenNames;
         print(
-          '    - ${dish.name}'
+          '    - ${dish.cleanName}'
           '${allergens.isEmpty ? '' : ' [${allergens.join(', ')}]'}',
         );
+      }
+      if (meal.nutrition['단백질'] case final protein?) {
+        print('    단백질 ${protein.value}${protein.unit ?? ''}');
       }
     }
 
