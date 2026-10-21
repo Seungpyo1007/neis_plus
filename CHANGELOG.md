@@ -1,3 +1,44 @@
+## 0.1.0
+
+* Add `findSchools` and `findSchool`, which search by a name as people type it
+  and sort the best match first. Short names work: `서울고` finds
+  서울고등학교 and `경덕여고` finds 경덕여자고등학교, which NEIS's own search
+  for the short name misses. `expandNeisSchoolName` and `rankNeisSchools` do
+  the same without a request.
+* Add `NeisMealType` (조식, 중식, 석식), `meals(type:)`, `NeisMeal.type`, and
+  `todayMeals`, which reads today's meals in Korean time.
+* Add `NeisDish.cleanName` and `NeisDish.markers`, which split the marks
+  schools add to dish names (`*`, `@`, `(가)`, `(자율)`, `(점심)`, a trailing
+  `s` or digit, `[기후동행식단]`) from the name. `NeisDish.name` is unchanged.
+* Add `NeisMeal.kcal`, `NeisMeal.nutrition` (`NeisNutrient` with value and
+  unit), and `NeisMeal.origins` (`NeisOrigin`), parsed from `CAL_INFO`,
+  `NTR_INFO`, and `ORPLC_INFO`.
+* Add `NeisAllergen`, an enum of the 19 allergens, with
+  `NeisDish.allergenKinds` and `contains`, and `NeisMeal.allergens`,
+  `containsAllergen`, `containsAnyAllergen`, and `dishesWithout`.
+* Add `NeisPage`, with the total NEIS reports and whether the answer was cut
+  off at `maxPages`, returned by the new `schoolsPage`, `academiesPage`,
+  `rawPage`, and `callPage`. The list methods are unchanged.
+* Add `stream`, which reads every page of a service lazily and stops
+  requesting when the subscription is cancelled.
+* Add `toIcs` on lists of `NeisScheduleEvent`, an iCalendar (RFC 5545) export
+  with stable UIDs, a grade filter, and the weekly 토요휴업일 left out by
+  default.
+* Add the filters NEIS accepts but the methods did not: `kind` and
+  `foundation` on `schools`; `courseName` and `dayNightName` on `schedule`;
+  course, day or night, track, and department on `classes` and `classrooms`;
+  `period`, `classroomName`, `courseName`, `dayNightName`, `trackName`, and
+  `departmentName` on `timetable`.
+* Add model fields NEIS sends: postal code, address detail, fax,
+  coeducation, high school type, day or night, founding date, and supervising
+  office on `NeisSchool`; school year, course, day or night, and `grades` with
+  `appliesToGrade` and `isSaturdayBreak` on `NeisScheduleEvent`; school year,
+  semester, classroom, course, day or night, track, and department on
+  `NeisLesson`; day or night and track on `NeisClass`; registration date,
+  suspension dates, simultaneous capacity, branch and tuition flags, address
+  detail, and postal code on `NeisAcademy`; school name on `NeisMeal`.
+* Add `NeisErrorCode`, constants for every `NeisException.code`.
+
 ## 0.0.4
 
 * Fix `NeisMeal.servings` always being `null` on the Dart VM and Flutter

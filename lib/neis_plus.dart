@@ -8,6 +8,10 @@ library;
 
 export 'src/client.dart';
 export 'src/exception.dart';
+export 'src/ics.dart';
+export 'src/meal_info.dart';
 export 'src/models.dart';
+export 'src/page.dart';
 export 'src/row.dart';
+export 'src/search.dart';
 export 'src/services.dart';
