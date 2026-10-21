@@ -21,7 +21,7 @@ or any office of education.
 final neis = NeisClient();
 
 final school = (await neis.schools(name: '서울고등학교')).first;
-final meals = await neis.meals(school, date: DateTime.now());
+final meals = await neis.meals(school, date: neisToday());
 
 for (final dish in meals.first.dishes) {
   print('${dish.name} ${dish.allergenNames}'); // 미역국 [난류, 대두, 밀]
@@ -39,6 +39,10 @@ register a key at [open.neis.go.kr](https://open.neis.go.kr) for real use:
 ```dart
 final neis = NeisClient(apiKey: 'YOUR-KEY');
 ```
+
+The key travels in the query string, so keep it on a server you control. A
+key shipped in a Flutter app or a web page can be read by anyone who has the
+app.
 
 ## Every NEIS service
 
@@ -66,8 +70,9 @@ method, and [`NeisService`](lib/src/services.dart) names them all for
 - **Meals**: dishes split out of the raw `<br/>` menu, with allergen numbers
   turned into Korean names, plus calories, servings, and origin.
 - **Timetables**: the right service is chosen for the school level, past
-  school years included, and lessons come back sorted by date and period.
-- **Calendar**: events with `isSchoolClosed` for 휴업일.
+  school years included, and lessons come back sorted by date, grade, class,
+  and period.
+- **Calendar**: events with `isSchoolClosed` for 휴업일 and 공휴일.
 - **Classes, departments, tracks, classrooms**: the structure behind a
   timetable.
 - **Academies**: 학원 and 교습소 by region, field, and course.
@@ -85,7 +90,7 @@ macOS, Linux, and the web.
 
 ```yaml
 dependencies:
-  neis_plus: ^0.0.3
+  neis_plus: ^0.0.4
 ```
 
 ## Usage
@@ -111,11 +116,15 @@ final lessons = await neis.timetable(
 );
 ```
 
-A past school year lives in a separate NEIS service, so ask for it:
+Past school years live in a separate NEIS service. `timetable` asks the one
+that usually holds the year first and the other when the answer is empty, so
+an old year needs nothing extra:
 
 ```dart
-final old = await neis.timetable(school, year: '2023', archived: true);
+final old = await neis.timetable(school, year: '2023', grade: '1');
 ```
+
+Pass `archived: true` or `archived: false` to read only one of the two.
 
 School calendar, skipping closed days:
 
@@ -175,7 +184,7 @@ throws `missing_parameter` naming it instead of NEIS's unhelpful `ERROR-300`.
 
 ```dart
 try {
-  await neis.meals(school, date: DateTime.now());
+  await neis.meals(school, date: neisToday());
 } on NeisException catch (error) {
   switch (error.code) {
     case 'invalid_key':
@@ -207,17 +216,41 @@ try {
 - NEIS ignores `AY` on `SchoolSchedule`, so `schedule(year:)` never filtered
   anything and is deprecated; pass `from` and `to` instead.
 - The past-year timetable services are not in the NEIS catalogue, so their
-  parameters can change without notice. They also write class names
-  differently — `CLASS_NM` is `01` there where the current service says `1`.
+  parameters can change without notice.
+- Some school years are in neither timetable service: NEIS has no 2024
+  timetable for many schools, and those come back empty.
+- Schools write class names as `1` or `01`, and NEIS only matches the one the
+  school used. `timetable` tries the other spelling when the first matches
+  nothing.
+- A call reads at most `maxPages` pages of `pageSize` rows, 500 rows with the
+  defaults, and stops there without saying so. A whole school year's
+  timetable is tens of thousands of rows: narrow it with `grade`, `className`,
+  and dates, or raise `maxPages`.
+- NEIS dates are Korean dates. Use `neisToday()` rather than `DateTime.now()`
+  on a server or a device outside Korea.
 - Rows keep NEIS field names in `raw`, and the typed classes cover the common
   fields only.
 - NEIS publishes data per office of education; a school that has not uploaded
   its meals or timetable returns an empty list, not an error.
 - Timetable services differ by school level. A school built with
-  `NeisSchool.codes` has no level, so pass `kind:` to `timetable`.
+  `NeisSchool.codes` has no level, so pass `kind:` to `timetable`; without it
+  `timetable` throws `missing_parameter` instead of guessing.
+- `schools` leaves out planned schools NEIS lists before they get a school
+  code, such as `(가칭)` names, and the other methods refuse a school without
+  codes: NEIS answers a blank code with another institution's data.
 - Office names change — 광주 and 전남 now both answer as
   전남광주통합특별시교육청 — so `NeisOffice.label` is a hint and
   `ATPT_OFCDC_SC_NM` on a row is the current name.
 - Allergen numbers follow the 19 items NEIS lists; schools sometimes write
   menus that do not follow the format, and those dishes come back without
   allergens.
+
+## Related packages
+
+Pure Dart packages from the same publisher:
+
+| Package | What it reads |
+| --- | --- |
+| [data_go_kr](https://pub.dev/packages/data_go_kr) | 공공데이터포털 (data.go.kr) APIs, with 기상청 forecast helpers |
+| [rdap](https://pub.dev/packages/rdap) | Domain registration data |
+| [mail_dns_check](https://pub.dev/packages/mail_dns_check) | Email DNS records: SPF, DMARC, DKIM, and MX |

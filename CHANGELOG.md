@@ -1,3 +1,39 @@
+## 0.0.4
+
+* Fix `NeisMeal.servings` always being `null` on the Dart VM and Flutter
+  apps. NEIS sends `MLSV_FGR` as a JSON number such as `780.00`, which the VM
+  decodes as a double. `NeisRow.integer` and `NeisRow.number` read numbers in
+  either shape too.
+* Fix meals and other data of an unrelated institution coming back for a
+  planned school. `schools` leaves out schools whose code NEIS sends blank,
+  codes are trimmed, and the school methods throw `missing_parameter` for a
+  school without codes instead of sending them. `NeisSchool.hasCodes` tells.
+* Fix past school years coming back empty from `timetable`. Without
+  `archived`, it asks the service that usually holds the year first and the
+  other when the answer is empty; `archived: true` or `false` still reads only
+  one. When `className` matches nothing it tries the other spelling (`1` or
+  `01`), since schools write it either way. NEIS has no 2024 timetable for
+  many schools in either service, and those still come back empty.
+* Fix `isSchoolClosed` missing public holidays: `공휴일` counts as closed, like
+  `휴업일`.
+* Fix lessons of several classes coming back interleaved. `timetable` sorts
+  by date, grade, class, and period.
+* Fix `timetable` silently reading the high school service for a school made
+  with `NeisSchool.codes` and no `kind`. It throws `missing_parameter`.
+* Fix `parseNeisDate` rolling impossible dates such as `20261340` into the
+  next year. They are `null`.
+* Add `neisToday()`, today's date in Korea whatever the device's time zone.
+  The README and example use it instead of `DateTime.now()`.
+* `pageSize` and `rawRows(rows:)` must be between 1 and 1000; other values
+  throw a `RangeError` instead of failing at NEIS with `ERROR-336`.
+* Retry a request that timed out once, like a dropped connection. A NEIS
+  rate limit answer (`ERROR-337`) is not retried.
+* `NeisMeal.nutrients` and `NeisMeal.origin` put each item on its own line
+  instead of keeping NEIS's `<br/>` tags, and a bare `http://` website is
+  `null`.
+* README: warn against shipping an API key in an app, document the 500-row
+  default limit, and link related packages.
+
 ## 0.0.3
 
 * Cover every service the NEIS open API publishes. New methods: `academies`
