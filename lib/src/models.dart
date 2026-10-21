@@ -1,4 +1,5 @@
 import 'services.dart';
+import 'values.dart';
 
 /// School level, from `SCHUL_KND_SC_NM`. It decides which timetable service a
 /// school uses.
@@ -29,6 +30,8 @@ enum NeisSchoolKind {
   /// Service that serves this level's timetable for past school years.
   ///
   /// NEIS splits the two: a year is served by one or the other, never both.
+  /// Some years are in neither; the 2024 school year is missing from both for
+  /// many schools.
   final NeisService archiveTimetable;
 
   /// Path of [timetable].
@@ -64,6 +67,9 @@ class NeisSchool {
 
   /// Creates a reference from codes you already have, for when you skip the
   /// school search.
+  ///
+  /// Pass [kind] to read a timetable: NEIS serves each school level from its
+  /// own service, and [NeisClient.timetable] refuses to guess.
   const NeisSchool.codes(
     this.officeCode,
     this.schoolCode, {
@@ -80,8 +86,8 @@ class NeisSchool {
 
   /// Reads a `schoolInfo` row.
   factory NeisSchool.fromRow(Map<String, Object?> row) => NeisSchool(
-    officeCode: '${row['ATPT_OFCDC_SC_CODE'] ?? ''}',
-    schoolCode: '${row['SD_SCHUL_CODE'] ?? ''}',
+    officeCode: '${row['ATPT_OFCDC_SC_CODE'] ?? ''}'.trim(),
+    schoolCode: '${row['SD_SCHUL_CODE'] ?? ''}'.trim(),
     officeName: '${row['ATPT_OFCDC_SC_NM'] ?? ''}',
     name: '${row['SCHUL_NM'] ?? ''}',
     englishName: _text(row['ENG_SCHUL_NM']),
@@ -90,7 +96,7 @@ class NeisSchool {
     foundation: _text(row['FOND_SC_NM']),
     address: _text(row['ORG_RDNMA']),
     phone: _text(row['ORG_TELNO']),
-    website: _text(row['HMPG_ADRES']),
+    website: _website(row['HMPG_ADRES']),
     raw: row,
   );
 
@@ -98,7 +104,15 @@ class NeisSchool {
   final String officeCode;
 
   /// School code, `SD_SCHUL_CODE`.
+  ///
+  /// Empty for planned schools NEIS lists before they get a code, such as
+  /// `(가칭)` names. [NeisClient.schools] leaves those out.
   final String schoolCode;
+
+  /// Whether both codes are set, so the other services can look the school
+  /// up.
+  bool get hasCodes =>
+      officeCode.trim().isNotEmpty && schoolCode.trim().isNotEmpty;
 
   /// Office of education name.
   final String officeName;
@@ -199,9 +213,9 @@ class NeisMeal {
     typeName: '${row['MMEAL_SC_NM'] ?? ''}',
     dishes: parseNeisDishes('${row['DDISH_NM'] ?? ''}'),
     calories: _text(row['CAL_INFO']),
-    nutrients: _text(row['NTR_INFO']),
-    servings: int.tryParse('${row['MLSV_FGR'] ?? ''}'.trim()),
-    origin: _text(row['ORPLC_INFO']),
+    nutrients: _lines(row['NTR_INFO']),
+    servings: neisInt(row['MLSV_FGR']),
+    origin: _lines(row['ORPLC_INFO']),
     raw: row,
   );
 
@@ -217,13 +231,13 @@ class NeisMeal {
   /// Calories as published, such as `533.5 Kcal`.
   final String? calories;
 
-  /// Nutrient breakdown as published.
+  /// Nutrient breakdown as published, one nutrient per line.
   final String? nutrients;
 
   /// Number of people served.
   final int? servings;
 
-  /// Origin of ingredients as published.
+  /// Origin of ingredients as published, one ingredient per line.
   final String? origin;
 
   /// The full row, for fields this class does not model.
@@ -265,11 +279,12 @@ class NeisScheduleEvent {
   /// Longer description, when published.
   final String? content;
 
-  /// `휴업일` when school is closed that day.
+  /// `휴업일` or `공휴일` when school is closed that day, `해당없음` otherwise.
   final String? dayKind;
 
-  /// Whether school is closed on this day.
-  bool get isSchoolClosed => dayKind == '휴업일';
+  /// Whether school is closed on this day: a 휴업일, such as a vacation day,
+  /// or a 공휴일, a public holiday.
+  bool get isSchoolClosed => dayKind == '휴업일' || dayKind == '공휴일';
 
   /// The full row, for fields this class does not model.
   final Map<String, Object?> raw;
@@ -294,7 +309,7 @@ class NeisLesson {
   /// Reads a timetable row.
   factory NeisLesson.fromRow(Map<String, Object?> row) => NeisLesson(
     date: parseNeisDate('${row['ALL_TI_YMD'] ?? ''}') ?? DateTime(0),
-    period: int.tryParse('${row['PERIO'] ?? ''}'.trim()) ?? 0,
+    period: neisInt(row['PERIO']) ?? 0,
     subject: '${row['ITRT_CNTNT'] ?? ''}',
     grade: _text(row['GRADE']),
     className: _text(row['CLASS_NM']),
@@ -402,7 +417,7 @@ class NeisAcademy {
     level: _text(row['LE_ORD_NM']),
     courseName: _text(row['LE_CRSE_NM']),
     courseList: _text(row['LE_CRSE_LIST_NM']),
-    capacity: int.tryParse('${row['TOFOR_SMTOT'] ?? ''}'.trim()),
+    capacity: neisInt(row['TOFOR_SMTOT']),
     tuition: _text(row['PSNBY_THCC_CNTNT']),
     address: _text(row['FA_RDNMA']),
     phone: _text(row['FA_TELNO']),
@@ -453,7 +468,7 @@ class NeisAcademy {
   /// Phone number.
   final String? phone;
 
-  /// Registration status, such as 정상.
+  /// Registration status, such as 개원.
   final String? status;
 
   /// Day the academy was established.
@@ -619,17 +634,34 @@ class NeisClassroom {
 }
 
 /// Parses a NEIS `yyyyMMdd` date, or returns `null`.
+///
+/// A date that does not exist, such as `20261340`, is `null` rather than
+/// rolled over into the next year.
 DateTime? parseNeisDate(String value) {
   final text = value.trim();
-  if (text.length != 8) return null;
-  final year = int.tryParse(text.substring(0, 4));
-  final month = int.tryParse(text.substring(4, 6));
-  final day = int.tryParse(text.substring(6, 8));
-  if (year == null || month == null || day == null) return null;
-  return DateTime(year, month, day);
+  if (!RegExp(r'^\d{8}$').hasMatch(text)) return null;
+  final year = int.parse(text.substring(0, 4));
+  final month = int.parse(text.substring(4, 6));
+  final day = int.parse(text.substring(6, 8));
+  final date = DateTime(year, month, day);
+  if (date.month != month || date.day != day) return null;
+  return date;
+}
+
+/// Today's date in Korea, whatever the device's time zone.
+///
+/// NEIS dates are Korean dates, so a server in UTC or a phone abroad asking
+/// for `DateTime.now()` between midnight and 9:00 KST would get yesterday's
+/// meals. Pass [now] to compute it for another moment.
+DateTime neisToday([DateTime? now]) {
+  final korea = (now ?? DateTime.now()).toUtc().add(const Duration(hours: 9));
+  return DateTime(korea.year, korea.month, korea.day);
 }
 
 /// Formats a date the way NEIS parameters expect.
+///
+/// The year, month, and day fields are sent as they are. For today in Korea,
+/// pass [neisToday].
 String formatNeisDate(DateTime date) =>
     '${date.year.toString().padLeft(4, '0')}'
     '${date.month.toString().padLeft(2, '0')}'
@@ -664,4 +696,27 @@ String? _text(Object? value) {
   if (value == null) return null;
   final text = '$value'.trim();
   return text.isEmpty ? null : text;
+}
+
+/// Reads a field NEIS breaks into lines with `<br/>`.
+String? _lines(Object? value) {
+  final text = _text(value);
+  if (text == null) return null;
+  final lines = [
+    for (final line in text.split(RegExp(r'<br\s*/?>', caseSensitive: false)))
+      if (line.trim().isNotEmpty) line.trim(),
+  ];
+  return lines.isEmpty ? null : lines.join('\n');
+}
+
+/// Reads a website, dropping the bare `http://` NEIS sends for schools
+/// without one.
+String? _website(Object? value) {
+  final text = _text(value);
+  if (text == null) return null;
+  final rest = text.replaceFirst(
+    RegExp(r'^https?:/*', caseSensitive: false),
+    '',
+  );
+  return rest.isEmpty ? null : text;
 }

@@ -7,6 +7,7 @@ import 'exception.dart';
 import 'models.dart';
 import 'row.dart';
 import 'services.dart';
+import 'values.dart';
 
 /// Reads school data from the NEIS open API (`open.neis.go.kr`).
 ///
@@ -16,11 +17,13 @@ import 'services.dart';
 /// ```dart
 /// final neis = NeisClient();
 /// final schools = await neis.schools(name: '서울고등학교');
-/// final meals = await neis.meals(schools.first, date: DateTime.now());
+/// final meals = await neis.meals(schools.first, date: neisToday());
 /// neis.close();
 /// ```
 class NeisClient {
   /// Creates a client.
+  ///
+  /// [pageSize] must be between 1 and 1000, the most NEIS sends per request.
   NeisClient({
     this.apiKey,
     http.Client? client,
@@ -29,7 +32,9 @@ class NeisClient {
     this.pageSize = 100,
   }) : _client = client ?? http.Client(),
        _ownsClient = client == null,
-       endpoint = endpoint ?? Uri.parse('https://open.neis.go.kr/hub');
+       endpoint = endpoint ?? Uri.parse('https://open.neis.go.kr/hub') {
+    _checkPageSize(pageSize, 'pageSize');
+  }
 
   final http.Client _client;
   final bool _ownsClient;
@@ -56,6 +61,10 @@ class NeisClient {
   }
 
   /// Searches schools by name, region, or office of education.
+  ///
+  /// Planned schools that NEIS lists before they have a school code are left
+  /// out: the other services cannot look them up, and asking with a blank
+  /// code returns some other institution's data.
   Future<List<NeisSchool>> schools({
     String? name,
     String? officeCode,
@@ -69,7 +78,11 @@ class NeisClient {
       'SD_SCHUL_CODE': schoolCode,
       'LCTN_SC_NM': region,
     }, maxPages: maxPages);
-    return [for (final row in rows) NeisSchool.fromRow(row)];
+    return [
+      for (final row in rows)
+        if (NeisSchool.fromRow(row) case final school when school.hasCodes)
+          school,
+    ];
   }
 
   /// Reads school meals for one day, or for a range when [from] and [to] are
@@ -81,6 +94,7 @@ class NeisClient {
     DateTime? to,
     int maxPages = 5,
   }) async {
+    _checkCodes(school, 'meals');
     final rows = await rawRows(NeisService.mealServiceDietInfo.path, {
       'ATPT_OFCDC_SC_CODE': school.officeCode,
       'SD_SCHUL_CODE': school.schoolCode,
@@ -104,6 +118,7 @@ class NeisClient {
     String? year,
     int maxPages = 5,
   }) async {
+    _checkCodes(school, 'schedule');
     final rows = await rawRows(NeisService.schoolSchedule.path, {
       'ATPT_OFCDC_SC_CODE': school.officeCode,
       'SD_SCHUL_CODE': school.schoolCode,
@@ -121,8 +136,18 @@ class NeisClient {
   /// when you built the school from codes alone.
   ///
   /// NEIS also splits the years in two: the current service holds the recent
-  /// school years and an archive holds the older ones, with no overlap. Set
-  /// [archived] to read a [year] the current service answers empty for.
+  /// school years and an archive holds the older ones, with no overlap. Leave
+  /// [archived] unset and the client asks the service that usually holds the
+  /// requested year first and the other one when that answer is empty. Set it
+  /// to `true` or `false` to read only the archive or only the current
+  /// service. Some years are in neither: NEIS has no 2024 timetable for many
+  /// schools, and those come back empty.
+  ///
+  /// Schools write [className] as `1` or `01`, and NEIS only matches the
+  /// spelling the school used, so the other spelling is tried when the first
+  /// matches nothing.
+  ///
+  /// Lessons are sorted by date, grade, class, and period.
   Future<List<NeisLesson>> timetable(
     NeisSchool school, {
     DateTime? date,
@@ -133,28 +158,49 @@ class NeisClient {
     String? year,
     String? semester,
     NeisSchoolKind? kind,
-    bool archived = false,
+    bool? archived,
     int maxPages = 5,
   }) async {
+    _checkCodes(school, 'timetable');
     final level = kind ?? school.kind;
-    final service = archived ? level.archiveTimetable : level.timetable;
-    final rows = await rawRows(service.path, {
-      'ATPT_OFCDC_SC_CODE': school.officeCode,
-      'SD_SCHUL_CODE': school.schoolCode,
-      'ALL_TI_YMD': date == null ? null : formatNeisDate(date),
-      'TI_FROM_YMD': from == null ? null : formatNeisDate(from),
-      'TI_TO_YMD': to == null ? null : formatNeisDate(to),
-      'GRADE': grade,
-      'CLASS_NM': className,
-      'AY': year,
-      'SEM': semester,
-    }, maxPages: maxPages);
-    final lessons = [for (final row in rows) NeisLesson.fromRow(row)]
-      ..sort((a, b) {
-        final byDate = a.date.compareTo(b.date);
-        return byDate != 0 ? byDate : a.period.compareTo(b.period);
-      });
-    return lessons;
+    if (kind == null && level == NeisSchoolKind.other && school.raw.isEmpty) {
+      // A school built from codes alone defaults to `other`, which would
+      // silently read the high school service.
+      throw const NeisException(
+        'timetable needs the school level. Pass kind, or use a school from '
+        'schools().',
+        code: 'missing_parameter',
+      );
+    }
+    final services = switch (archived) {
+      true => [level.archiveTimetable],
+      false => [level.timetable],
+      null when _isPastYear(year, date ?? from) => [
+        level.archiveTimetable,
+        level.timetable,
+      ],
+      null => [level.timetable, level.archiveTimetable],
+    };
+    final classNames = [className, ?_otherClassSpelling(className)];
+    for (final service in services) {
+      for (final name in classNames) {
+        final rows = await rawRows(service.path, {
+          'ATPT_OFCDC_SC_CODE': school.officeCode,
+          'SD_SCHUL_CODE': school.schoolCode,
+          'ALL_TI_YMD': date == null ? null : formatNeisDate(date),
+          'TI_FROM_YMD': from == null ? null : formatNeisDate(from),
+          'TI_TO_YMD': to == null ? null : formatNeisDate(to),
+          'GRADE': grade,
+          'CLASS_NM': name,
+          'AY': year,
+          'SEM': semester,
+        }, maxPages: maxPages);
+        if (rows.isEmpty) continue;
+        return [for (final row in rows) NeisLesson.fromRow(row)]
+          ..sort(_compareLessons);
+      }
+    }
+    return const [];
   }
 
   /// Reads the classes of a school for a school year.
@@ -164,6 +210,7 @@ class NeisClient {
     String? grade,
     int maxPages = 5,
   }) async {
+    _checkCodes(school, 'classes');
     final rows = await rawRows(NeisService.classInfo.path, {
       'ATPT_OFCDC_SC_CODE': school.officeCode,
       'SD_SCHUL_CODE': school.schoolCode,
@@ -215,6 +262,7 @@ class NeisClient {
     String? dayNightName,
     int maxPages = 5,
   }) async {
+    if (school != null) _checkCodes(school, 'majors');
     final rows = await rawRows(NeisService.schoolMajorInfo.path, {
       'ATPT_OFCDC_SC_CODE': officeCode ?? school?.officeCode,
       'SD_SCHUL_CODE': school?.schoolCode,
@@ -232,6 +280,7 @@ class NeisClient {
     String? dayNightName,
     int maxPages = 5,
   }) async {
+    if (school != null) _checkCodes(school, 'tracks');
     final rows = await rawRows(NeisService.schulAflcoInfo.path, {
       'ATPT_OFCDC_SC_CODE': officeCode ?? school?.officeCode,
       'SD_SCHUL_CODE': school?.schoolCode,
@@ -249,6 +298,7 @@ class NeisClient {
     String? departmentName,
     int maxPages = 5,
   }) async {
+    _checkCodes(school, 'classrooms');
     final rows = await rawRows(NeisService.tiClrmInfo.path, {
       'ATPT_OFCDC_SC_CODE': school.officeCode,
       'SD_SCHUL_CODE': school.schoolCode,
@@ -275,12 +325,17 @@ class NeisClient {
   /// Without an [apiKey] there is no paging to follow: NEIS answers every
   /// page with the same first 5 rows, so a keyless call returns 5 rows at
   /// most and stops after one request.
+  ///
+  /// At most [maxPages] times [rows] rows come back, 500 with the defaults.
+  /// Raise [maxPages] for large result sets such as a whole school year's
+  /// timetable.
   Future<List<Map<String, Object?>>> rawRows(
     String service,
     Map<String, Object?> params, {
     int? rows,
     int maxPages = 5,
   }) async {
+    if (rows != null) _checkPageSize(rows, 'rows');
     final size = rows ?? pageSize;
     final collected = <Map<String, Object?>>[];
     Map<String, Object?>? firstRowOfPreviousPage;
@@ -341,6 +396,59 @@ class NeisClient {
     return [for (final row in result) NeisRow(row)];
   }
 
+  static void _checkPageSize(int size, String name) {
+    if (size < 1 || size > 1000) throw RangeError.range(size, 1, 1000, name);
+  }
+
+  /// Refuses a school without codes: NEIS treats a blank code as no filter
+  /// and answers with some other institution's rows.
+  static void _checkCodes(NeisSchool school, String method) {
+    if (school.hasCodes) return;
+    throw NeisException(
+      '$method needs a school with an office code and a school code.',
+      code: 'missing_parameter',
+    );
+  }
+
+  /// Whether [year], or the school year of [day], is older than the ones the
+  /// current timetable services usually hold: this school year and the one
+  /// before. A Korean school year starts in March.
+  static bool _isPastYear(String? year, DateTime? day) {
+    int schoolYear(DateTime d) => d.month >= 3 ? d.year : d.year - 1;
+    final target =
+        int.tryParse(year?.trim() ?? '') ??
+        (day == null ? null : schoolYear(day));
+    return target != null && target < schoolYear(neisToday()) - 1;
+  }
+
+  /// `01` for `1` and `1` for `01`, or `null` when [name] is not a class
+  /// number written either way.
+  static String? _otherClassSpelling(String? name) {
+    final text = name?.trim() ?? '';
+    if (RegExp(r'^[1-9]$').hasMatch(text)) return '0$text';
+    if (RegExp(r'^0[1-9]$').hasMatch(text)) return text.substring(1);
+    return null;
+  }
+
+  static int _compareLessons(NeisLesson a, NeisLesson b) {
+    for (final order in [
+      a.date.compareTo(b.date),
+      _compareNumbers(a.grade, b.grade),
+      _compareNumbers(a.className, b.className),
+      a.period.compareTo(b.period),
+    ]) {
+      if (order != 0) return order;
+    }
+    return 0;
+  }
+
+  /// Compares `2` before `10`, and `01` with `1` as equal.
+  static int _compareNumbers(String? a, String? b) {
+    final (x, y) = (neisInt(a), neisInt(b));
+    if (x != null && y != null) return x.compareTo(y);
+    return (a ?? '').compareTo(b ?? '');
+  }
+
   static bool _sameRow(Map<String, Object?>? a, Map<String, Object?> b) {
     if (a == null || a.length != b.length) return false;
     for (final entry in a.entries) {
@@ -370,11 +478,18 @@ class NeisClient {
     ).replace(queryParameters: query);
 
     Future<http.Response> get() => _client.get(uri).timeout(timeout);
-    final http.Response response;
+    http.Response response;
     try {
-      // A dropped keep-alive connection is common; GET is idempotent, so retry
-      // once on a fresh connection.
-      response = await get().onError<http.ClientException>((_, _) => get());
+      // A dropped keep-alive connection or a stalled request is common; GET is
+      // idempotent, so retry once on a fresh connection. A NEIS error such as
+      // ERROR-337 (rate limit) arrives as a normal response and is not retried.
+      try {
+        response = await get();
+      } on http.ClientException {
+        response = await get();
+      } on TimeoutException {
+        response = await get();
+      }
     } on TimeoutException {
       throw NeisException(
         'The request to ${uri.host} timed out.',
@@ -449,7 +564,7 @@ class NeisClient {
       for (final entry in head['head'] as List) {
         if (entry is! Map) continue;
         if (entry['list_total_count'] != null) {
-          total = int.tryParse('${entry['list_total_count']}') ?? 0;
+          total = neisInt(entry['list_total_count']) ?? 0;
         }
         final headResult = entry['RESULT'];
         if (headResult is Map) {

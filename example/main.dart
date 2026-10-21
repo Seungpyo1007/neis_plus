@@ -21,7 +21,7 @@ Future<void> main(List<String> args) async {
     final school = schools.first;
     print('${school.name} (${school.region}, ${school.kind.label})');
 
-    final today = DateTime.now();
+    final today = neisToday();
     final meals = await client.meals(school, date: today);
     if (meals.isEmpty) {
       print('  오늘 급식 정보가 없습니다.');

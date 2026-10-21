@@ -1,9 +1,11 @@
 import 'models.dart' show parseNeisDate;
+import 'values.dart';
 
 /// One row of a NEIS response, for services this package has no model for.
 ///
-/// NEIS sends every field as a string, including numbers and `yyyyMMdd`
-/// dates, so this wrapper reads them back out:
+/// NEIS sends almost every field as a string, including numbers and
+/// `yyyyMMdd` dates, and a few numbers as JSON numbers, so this wrapper reads
+/// them back out:
 ///
 /// ```dart
 /// final rows = await neis.call(NeisService.acaInsTiInfo, {
@@ -35,10 +37,12 @@ class NeisRow {
   }
 
   /// Reads [field] as a whole number, or `null` when it is not one.
-  int? integer(String field) => int.tryParse(text(field) ?? '');
+  ///
+  /// `780`, `"780"`, `780.00`, and `"780.00"` all read as 780.
+  int? integer(String field) => neisInt(fields[field]);
 
   /// Reads [field] as a number, or `null` when it is not one.
-  double? number(String field) => double.tryParse(text(field) ?? '');
+  double? number(String field) => neisDouble(fields[field]);
 
   /// Reads [field] as a `yyyyMMdd` date, or `null` when it is not one.
   DateTime? date(String field) => parseNeisDate(text(field) ?? '');

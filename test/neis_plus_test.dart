@@ -41,6 +41,13 @@ final _seoulHigh = NeisSchool.codes(
   kind: NeisSchoolKind.high,
 );
 
+/// A schoolInfo row with codes, which [NeisClient.schools] requires.
+Map<String, Object?> _school(String name) => {
+  'ATPT_OFCDC_SC_CODE': 'B10',
+  'SD_SCHUL_CODE': '70100${name.hashCode % 100}',
+  'SCHUL_NM': name,
+};
+
 Matcher _throwsCode(String code) =>
     throwsA(isA<NeisException>().having((e) => e.code, 'code', code));
 
@@ -173,7 +180,9 @@ void main() {
           grade: '1',
         );
 
-        expect(requests.single.path, endsWith('/hub/$service'));
+        // Asked first; the archive is asked next because the answer was
+        // empty.
+        expect(requests.first.path, endsWith('/hub/$service'));
       }
     });
 
@@ -259,13 +268,8 @@ void main() {
           final page = request.url.queryParameters['pIndex']!;
           pages.add(page);
           final rows = page == '1'
-              ? [
-                  {'SCHUL_NM': 'a'},
-                  {'SCHUL_NM': 'b'},
-                ]
-              : [
-                  {'SCHUL_NM': 'c'},
-                ];
+              ? [_school('a'), _school('b')]
+              : [_school('c')];
           return http.Response(
             _page('schoolInfo', rows, total: 3),
             200,
@@ -312,10 +316,7 @@ void main() {
         client: MockClient((request) async {
           requests++;
           return http.Response(
-            _page('schoolInfo', [
-              {'SCHUL_NM': 'a'},
-              {'SCHUL_NM': 'b'},
-            ], total: 99),
+            _page('schoolInfo', [_school('a'), _school('b')], total: 99),
             200,
             headers: {'content-type': 'application/json; charset=utf-8'},
           );
@@ -398,9 +399,7 @@ void main() {
             throw http.ClientException('Connection closed', request.url);
           }
           return http.Response(
-            _page('schoolInfo', [
-              {'SCHUL_NM': '서울고등학교'},
-            ]),
+            _page('schoolInfo', [_school('서울고등학교')]),
             200,
             headers: {'content-type': 'application/json; charset=utf-8'},
           );
